@@ -64,3 +64,691 @@ const MUSCLE_MAP = {
   "پرس زیر سینه": { muscles: ["سینه تحتانی", "سه‌سر"], category: "سینه" },
   "فلای دمبل": { muscles: ["سینه"], category: "سینه" },
   "اسکوات": { muscles: ["چهارسر", "باسن", "همسترینگ"], category: "پا" },
+  "لانج": { muscles: ["چهارسر", "باسن"], category: "پا" },
+  "پرس پا": { muscles: ["چهارسر", "باسن"], category: "پا" },
+  "ددلیفت": { muscles: ["کمر", "باسن", "همسترینگ", "تله‌زی"], category: "کمر" },
+  "بارفیکس": { muscles: ["کمر عریض", "دوسر"], category: "کمر" },
+  "زیربارفیکس": { muscles: ["کمر عریض", "دوسر"], category: "کمر" },
+  "سیم‌کش": { muscles: ["کمر عریض", "دوسر"], category: "کمر" },
+  "رویینگ": { muscles: ["کمر میانی", "دوسر"], category: "کمر" },
+  "جلوبازو هالتر": { muscles: ["دوسر"], category: "جلوبازو" },
+  "جلوبازو دمبل": { muscles: ["دوسر"], category: "جلوبازو" },
+  "پشت‌بازو سیم‌کش": { muscles: ["سه‌سر"], category: "پشت‌بازو" },
+  "پشت‌بازو هالتر": { muscles: ["سه‌سر"], category: "پشت‌بازو" },
+  "دیپ": { muscles: ["سه‌سر", "سینه"], category: "پشت‌بازو" },
+  "نشر جانب": { muscles: ["سرشانه جانبی"], category: "سرشانه" },
+  "پرس سرشانه": { muscles: ["سرشانه", "سه‌سر"], category: "سرشانه" },
+  "ساق پا": { muscles: ["ساق"], category: "پا" },
+  "پلانک": { muscles: ["شکم", "کر"], category: "شکم" },
+  "کرانچ": { muscles: ["شکم"], category: "شکم" },
+};
+
+const MUSCLE_COLORS = {
+  "سینه": "#ef4444", "پا": "#f97316", "کمر": "#eab308",
+  "جلوبازو": "#22c55e", "پشت‌بازو": "#06b6d4",
+  "سرشانه": "#8b5cf6", "شکم": "#ec4899",
+};
+
+const ALL_EXERCISES = Object.keys(MUSCLE_MAP);
+
+function getMuscleVolume(session) {
+  const vol = {};
+  session.exercises.forEach(ex => {
+    const info = MUSCLE_MAP[ex.name];
+    const muscles = info ? info.muscles : ["سایر"];
+    const v = ex.sets.reduce((sum, s) => sum + s.weight * s.reps, 0);
+    muscles.forEach(m => { vol[m] = (vol[m] || 0) + v; });
+  });
+  return vol;
+}
+
+function totalVolume(s) {
+  return s.exercises.reduce((sum, ex) => sum + ex.sets.reduce((ss, st) => ss + st.weight * st.reps, 0), 0);
+}
+
+function buildExportText(session, prof) {
+  const lines = [`📅 تاریخ: ${session.date}${session.day ? " — " + session.day : ""}`, "", "🏋️ حرکات:"];
+  session.exercises.forEach(ex => {
+    lines.push(`\n▪ ${ex.name}`);
+    ex.sets.forEach((s, i) => lines.push(`  ست ${i + 1}: ${s.reps} تکرار × ${s.weight}kg`));
+  });
+  const vol = getMuscleVolume(session);
+  lines.push("\n💪 حجم عضلات:");
+  Object.entries(vol).sort((a, b) => b[1] - a[1]).forEach(([m, v]) => lines.push(`  ${m}: ${v}kg`));
+  lines.push(`\nحجم کل: ${totalVolume(session)}kg`);
+  if (prof && (prof.height || prof.weight)) {
+    lines.push("\n👤 مشخصات:");
+    if (prof.height) lines.push(`  قد: ${prof.height} سانتی‌متر`);
+    if (prof.weight) lines.push(`  وزن: ${prof.weight} کیلوگرم`);
+    if (prof.age) lines.push(`  سن: ${prof.age} سال`);
+    if (prof.gender) lines.push(`  جنسیت: ${prof.gender === "male" ? "مرد" : "زن"}`);
+    if (prof.goal) {
+      const goals = { muscle: "عضله‌سازی و حجم", fat: "کاهش وزن و چربی‌سوزی", endurance: "استقامت و آمادگی" };
+      lines.push(`  هدف: ${goals[prof.goal] || prof.goal}`);
+    }
+    if (prof.height && prof.weight) {
+      const bmi = (prof.weight / ((prof.height / 100) ** 2)).toFixed(1);
+      lines.push(`  BMI: ${bmi}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function toEnNum(str) {
+  return String(str)
+    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 1776)
+    .replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632)
+    .replace(/[٫،,]/g, ".")
+    .replace(/[^0-9.]/g, "")
+    .replace(/\.(?=.*\.)/g, "");
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+function App() {
+  const [sessions, setSessions] = useState([]);
+  const [ready, setReady] = useState(false);
+  const [view, setView] = useState("home");
+  const [currentSession, setCurrentSession] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [exportSession, setExportSession] = useState(null);
+  const [newEx, setNewEx] = useState({ name: "", sets: [{ weight: "", reps: "" }] });
+  const [customName, setCustomName] = useState("");
+  const [showCustom, setShowCustom] = useState(false);
+  const [sessionDate, setSessionDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [progressPeriod, setProgressPeriod] = useState("week");
+  const [copied, setCopied] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showProfileForm, setShowProfileForm] = useState(false);
+  const [profile, setProfile] = useState({ height: "", weight: "", age: "", gender: "male", goal: "muscle" });
+  const [apiKey, setApiKey] = useState(() => {
+    try { return localStorage.getItem("gym_api_key") || ""; } catch { return ""; }
+  });
+  const [showApiInput, setShowApiInput] = useState(false);
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+
+  // Load from IndexedDB on mount
+  useEffect(() => {
+    dbGetAll().then(data => { setSessions(data); setReady(true); }).catch(() => setReady(true));
+  }, []);
+
+  async function save(s) {
+    setSessions(s);
+    await dbSaveAll(s).catch(() => {});
+  }
+
+  // Session management
+  function startSession(dateVal) {
+    const d = dateVal ? new Date(dateVal) : new Date();
+    const label = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const dayStr = d.toLocaleDateString("en-US", { weekday: "long" });
+    setCurrentSession({ id: Date.now(), date: label, day: dayStr, exercises: [] });
+    setEditingId(null);
+    setView("log");
+  }
+
+  function startEdit(session) {
+    setCurrentSession(JSON.parse(JSON.stringify(session)));
+    setEditingId(session.id);
+    setView("log");
+  }
+
+  async function finishSession() {
+    if (!currentSession?.exercises?.length) return;
+    const updated = editingId
+      ? sessions.map(s => s.id === editingId ? currentSession : s)
+      : [currentSession, ...sessions];
+    await save(updated);
+    setExportSession(currentSession);
+    setCurrentSession(null);
+    setEditingId(null);
+    setView("export");
+  }
+
+  async function deleteSession(id) {
+    await save(sessions.filter(s => s.id !== id));
+    setConfirmDelete(null);
+  }
+
+  // Exercise form
+  function addSet() { setNewEx(e => ({ ...e, sets: [...e.sets, { weight: "", reps: "" }] })); }
+  function removeSet(i) { setNewEx(e => ({ ...e, sets: e.sets.filter((_, j) => j !== i) })); }
+  function updateSet(i, field, val) {
+    const clean = field === "weight" ? toEnNum(val) : toEnNum(val).replace(".", "");
+    setNewEx(e => { const sets = [...e.sets]; sets[i] = { ...sets[i], [field]: clean }; return { ...e, sets }; });
+  }
+
+  function addExercise() {
+    const name = showCustom ? customName : newEx.name;
+    if (!name || newEx.sets.some(s => !s.weight || !s.reps)) return;
+    const exercise = { name, sets: newEx.sets.map(s => ({ weight: Number(s.weight), reps: Number(s.reps) })) };
+    setCurrentSession(s => ({ ...s, exercises: [...s.exercises, exercise] }));
+    setNewEx({ name: "", sets: [{ weight: "", reps: "" }] });
+    setCustomName(""); setShowCustom(false);
+  }
+
+  function removeExercise(i) { setCurrentSession(s => ({ ...s, exercises: s.exercises.filter((_, j) => j !== i) })); }
+
+  function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => {});
+  }
+
+  // AI Analysis
+  async function analyzeWithAI(session, prof) {
+    if (!apiKey) { setShowApiInput(true); return; }
+    setAiLoading(true);
+    setAiResult("");
+    const text = buildExportText(session, prof);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1024,
+          system: "تو یک مربی بدنسازی حرفه‌ای ایرانی هستی. جلسه تمرینی کاربر رو تحلیل کن و گزارش فارسی کوتاه و کاربردی بده. شامل: ۱) خلاصه جلسه ۲) نقاط قوت ۳) پیشنهاد برای جلسه بعد ۴) اگه مشخصات بدنی داری تحلیل متناسب با هدف بده. لحن انرژیک و انگیزه‌بخش. از اموجی استفاده کن.",
+          messages: [{ role: "user", content: text }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setAiResult("❌ خطا: " + (data.error.message || "API key نامعتبر است"));
+      } else {
+        setAiResult(data.content?.[0]?.text || "خطا در دریافت پاسخ");
+      }
+    } catch(e) {
+      setAiResult("❌ خطا در اتصال به سرویس AI");
+    }
+    setAiLoading(false);
+  }
+
+  // Export/Import
+  function exportJSON() { setShowExportModal(true); }
+
+  function importJSON(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data)) { alert("فایل معتبر نیست"); return; }
+        const merged = [...data, ...sessions]
+          .filter((s, i, arr) => arr.findIndex(x => x.id === s.id) === i)
+          .sort((a, b) => b.id - a.id);
+        await save(merged);
+        alert(`✅ ${data.length} جلسه وارد شد`);
+      } catch { alert("خطا در خواندن فایل"); }
+    };
+    reader.readAsText(file);
+  }
+
+  // ── Loading ──────────────────────────────────────────────────────────────
+  if (!ready) return (
+    <div style={{ ...S.container, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ width: 40, height: 40, border: "3px solid #1e293b", borderTop: "3px solid #38bdf8", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      <p style={{ color: "#64748b", marginTop: 16, fontSize: 14 }}>در حال بارگذاری...</p>
+    </div>
+  );
+
+  // ── Export modal ─────────────────────────────────────────────────────────
+  const exportModal = showExportModal && (
+    <div style={S.overlay} onClick={() => setShowExportModal(false)}>
+      <div style={{ ...S.modalBox, width: "90%", maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={{ color: "#e2e8f0", fontWeight: 700 }}>💾 خروجی JSON</span>
+          <button onClick={() => setShowExportModal(false)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 18 }}>✕</button>
+        </div>
+        <p style={{ color: "#94a3b8", fontSize: 12, marginBottom: 10, lineHeight: 1.8 }}>این متن رو کپی کن و توی یه فایل .json ذخیره کن</p>
+        <textarea readOnly value={JSON.stringify(sessions, null, 2)}
+          style={{ width: "100%", height: 200, background: "#0f172a", border: "1px solid #334155", borderRadius: 8, color: "#94a3b8", fontSize: 11, padding: 10, resize: "none", fontFamily: "monospace", boxSizing: "border-box" }}
+          onFocus={e => e.target.select()} />
+        <button onClick={() => navigator.clipboard.writeText(JSON.stringify(sessions, null, 2)).then(() => { setShowExportModal(false); alert("✅ کپی شد!"); })}
+          style={{ ...S.primaryBtn, width: "100%", marginTop: 10 }}>📋 کپی همه</button>
+      </div>
+    </div>
+  );
+
+  // ── EXPORT VIEW ──────────────────────────────────────────────────────────
+  if (view === "export") {
+    const session = exportSession;
+    const muscleVol = session ? getMuscleVolume(session) : {};
+    const maxVol = Math.max(...Object.values(muscleVol), 1);
+    const text = session ? buildExportText(session) : "";
+    return (
+      <div style={S.container}>
+        <div style={S.header}>
+          <button onClick={() => setView("home")} style={S.backBtn}>← خانه</button>
+          <h1 style={S.title}>📊 گزارش تمرین</h1>
+        </div>
+        {session && <div style={{ textAlign: "center", marginBottom: 12 }}>
+          <span style={{ color: "#38bdf8", fontWeight: 700, fontSize: 16 }}>{session.date}</span>
+          {session.day && <span style={{ color: "#94a3b8", fontSize: 14, marginRight: 8 }}> — {session.day}</span>}
+        </div>}
+        <div style={S.card}>
+          <h3 style={S.sectionTitle}>💪 حجم هر عضله</h3>
+          {Object.entries(muscleVol).sort((a, b) => b[1] - a[1]).map(([muscle, vol]) => {
+            const cat = Object.entries(MUSCLE_MAP).find(([, v]) => v.muscles.includes(muscle))?.[1]?.category;
+            const color = MUSCLE_COLORS[cat] || "#94a3b8";
+            return (
+              <div key={muscle} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: "#e2e8f0", fontSize: 14 }}>{muscle}</span>
+                  <span style={{ color, fontSize: 13, fontWeight: 700 }}>{vol.toLocaleString()}kg</span>
+                </div>
+                <div style={{ background: "#0f172a", borderRadius: 6, height: 8 }}>
+                  <div style={{ width: `${(vol / maxVol) * 100}%`, background: color, height: "100%", borderRadius: 6 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={S.card}>
+          <h3 style={S.sectionTitle}>🤖 دریافت تحلیل AI</h3>
+
+          {/* Profile form */}
+          <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <span style={{ color: "#94a3b8", fontSize: 13 }}>👤 مشخصات بدنی (اختیاری)</span>
+              <button onClick={() => setShowProfileForm(v => !v)}
+                style={{ background: "none", border: "none", color: "#38bdf8", cursor: "pointer", fontSize: 12 }}>
+                {showProfileForm ? "بستن ▲" : "وارد کردن ▼"}
+              </button>
+            </div>
+            {showProfileForm && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>قد (cm)</div>
+                  <input type="text" inputMode="numeric" placeholder="مثلاً ۱۷۵"
+                    value={profile.height} onChange={e => setProfile(p => ({ ...p, height: toEnNum(e.target.value).replace(".", "") }))}
+                    style={{ ...S.input, fontSize: 13 }} />
+                </div>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>وزن (kg)</div>
+                  <input type="text" inputMode="decimal" placeholder="مثلاً ۷۵"
+                    value={profile.weight} onChange={e => setProfile(p => ({ ...p, weight: toEnNum(e.target.value) }))}
+                    style={{ ...S.input, fontSize: 13 }} />
+                </div>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>سن</div>
+                  <input type="text" inputMode="numeric" placeholder="مثلاً ۲۵"
+                    value={profile.age} onChange={e => setProfile(p => ({ ...p, age: toEnNum(e.target.value).replace(".", "") }))}
+                    style={{ ...S.input, fontSize: 13 }} />
+                </div>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>جنسیت</div>
+                  <select value={profile.gender} onChange={e => setProfile(p => ({ ...p, gender: e.target.value }))}
+                    style={{ ...S.select, fontSize: 13 }}>
+                    <option value="male">مرد</option>
+                    <option value="female">زن</option>
+                  </select>
+                </div>
+                <div style={{ gridColumn: "1/-1" }}>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>هدف</div>
+                  <select value={profile.goal} onChange={e => setProfile(p => ({ ...p, goal: e.target.value }))}
+                    style={{ ...S.select, fontSize: 13, width: "100%" }}>
+                    <option value="muscle">عضله‌سازی و حجم</option>
+                    <option value="fat">کاهش وزن و چربی‌سوزی</option>
+                    <option value="endurance">استقامت و آمادگی</option>
+                  </select>
+                </div>
+                {profile.height && profile.weight && (
+                  <div style={{ gridColumn: "1/-1", background: "#1e293b", borderRadius: 8, padding: "8px 12px" }}>
+                    <span style={{ color: "#94a3b8", fontSize: 12 }}>BMI: </span>
+                    <span style={{ color: "#38bdf8", fontWeight: 700, fontSize: 13 }}>
+                      {(profile.weight / ((profile.height / 100) ** 2)).toFixed(1)}
+                    </span>
+                    <span style={{ color: "#64748b", fontSize: 11, marginRight: 8 }}>
+                      {(() => {
+                        const bmi = profile.weight / ((profile.height / 100) ** 2);
+                        if (bmi < 18.5) return "(کمبود وزن)";
+                        if (bmi < 25) return "(نرمال ✅)";
+                        if (bmi < 30) return "(اضافه وزن)";
+                        return "(چاقی)";
+                      })()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* API Key input */}
+          {showApiInput && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: "#64748b", fontSize: 11, marginBottom: 6 }}>🔑 API Key را وارد کن (یک بار کافیه)</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="password"
+                  placeholder="sk-ant-..."
+                  defaultValue={apiKey}
+                  id="apiKeyInput"
+                  style={{ ...S.input, flex: 1, fontSize: 12 }}
+                />
+                <button onClick={() => {
+                  const val = document.getElementById("apiKeyInput").value.trim();
+                  if (val) {
+                    setApiKey(val);
+                    try { localStorage.setItem("gym_api_key", val); } catch {}
+                    setShowApiInput(false);
+                    analyzeWithAI(session, profile);
+                  }
+                }} style={S.primaryBtn}>ذخیره</button>
+              </div>
+            </div>
+          )}
+
+          {/* AI Result */}
+          {aiResult && (
+            <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, marginBottom: 14, color: "#cbd5e1", fontSize: 13, lineHeight: 2, whiteSpace: "pre-wrap" }}>
+              {aiResult}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button
+              onClick={() => { setAiResult(""); analyzeWithAI(session, profile); }}
+              disabled={aiLoading}
+              style={{ ...S.primaryBtn, flex: 2, opacity: aiLoading ? 0.7 : 1 }}>
+              {aiLoading ? "⏳ در حال تحلیل..." : "🤖 تحلیل با AI"}
+            </button>
+            <button onClick={() => copyText(buildExportText(session, profile))}
+              style={{ ...S.ghostBtn, flex: 1, fontSize: 12 }}>
+              {copied ? "✅" : "📋 کپی"}
+            </button>
+          </div>
+          {apiKey && (
+            <button onClick={() => { setShowApiInput(true); }} style={{ background: "none", border: "none", color: "#475569", fontSize: 11, cursor: "pointer", marginTop: 6, width: "100%" }}>
+              🔑 تغییر API Key
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── HISTORY VIEW ─────────────────────────────────────────────────────────
+  if (view === "history") return (
+    <div style={S.container}>
+      <div style={S.header}>
+        <button onClick={() => setView("home")} style={S.backBtn}>← بازگشت</button>
+        <h1 style={S.title}>📅 تاریخچه</h1>
+      </div>
+      {confirmDelete && (
+        <div style={S.overlay}>
+          <div style={S.modalBox}>
+            <p style={{ color: "#f1f5f9", marginBottom: 16, textAlign: "center" }}>این جلسه حذف بشه؟</p>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => deleteSession(confirmDelete)} style={{ ...S.primaryBtn, background: "#ef4444", flex: 1 }}>حذف</button>
+              <button onClick={() => setConfirmDelete(null)} style={{ ...S.ghostBtn, flex: 1 }}>لغو</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {sessions.length === 0
+        ? <div style={S.empty}>هنوز جلسه‌ای ثبت نشده</div>
+        : sessions.map(s => (
+          <div key={s.id} style={S.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#38bdf8", fontWeight: 700, fontSize: 15 }}>
+                  {s.date}{s.day && <span style={{ color: "#94a3b8", fontWeight: 400, fontSize: 13, marginRight: 6 }}>({s.day})</span>}
+                </div>
+                <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 4 }}>{s.exercises.length} حرکت • {totalVolume(s).toLocaleString()}kg</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+                  {s.exercises.map((ex, j) => <span key={j} style={S.tag}>{ex.name}</span>)}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <button onClick={() => copyText(buildExportText(s))} style={S.smallBtn}>📋</button>
+                <button onClick={() => startEdit(s)} style={{ ...S.smallBtn, color: "#fbbf24" }}>✏️</button>
+                <button onClick={() => setConfirmDelete(s.id)} style={{ ...S.smallBtn, color: "#ef4444" }}>🗑</button>
+              </div>
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+
+  // ── LOG VIEW ─────────────────────────────────────────────────────────────
+  if (view === "log") return (
+    <div style={S.container}>
+      <div style={S.header}>
+        <button onClick={() => { setCurrentSession(null); setView("home"); }} style={S.backBtn}>✕</button>
+        <h1 style={S.title}>🏋️ {editingId ? "ویرایش تمرین" : "ثبت تمرین"}</h1>
+      </div>
+      {currentSession?.exercises?.map((ex, i) => (
+        <div key={i} style={S.exerciseCard}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "#38bdf8", fontWeight: 700 }}>{ex.name}</span>
+            <button onClick={() => removeExercise(i)} style={S.removeBtn}>✕</button>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {ex.sets.map((s, j) => <span key={j} style={S.setChip}>{s.reps}×{s.weight}kg</span>)}
+          </div>
+        </div>
+      ))}
+      <div style={S.card}>
+        <h3 style={S.sectionTitle}>➕ اضافه کردن حرکت</h3>
+        {!showCustom
+          ? <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <select value={newEx.name} onChange={e => setNewEx(x => ({ ...x, name: e.target.value }))} style={S.select}>
+              <option value="">انتخاب حرکت...</option>
+              {ALL_EXERCISES.map(e => <option key={e} value={e}>{e}</option>)}
+            </select>
+            <button onClick={() => setShowCustom(true)} style={S.ghostBtn}>✏️</button>
+          </div>
+          : <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input value={customName} onChange={e => setCustomName(e.target.value)} placeholder="نام حرکت..." style={S.input} />
+            <button onClick={() => setShowCustom(false)} style={S.ghostBtn}>✕</button>
+          </div>
+        }
+        {newEx.sets.map((set, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+            <span style={{ color: "#64748b", fontSize: 13, minWidth: 32 }}>ست {i + 1}</span>
+            <input type="text" inputMode="decimal" placeholder="وزن kg" value={set.weight}
+              onChange={e => updateSet(i, "weight", e.target.value)} style={{ ...S.input, flex: 1 }} />
+            <input type="text" inputMode="numeric" placeholder="تکرار" value={set.reps}
+              onChange={e => updateSet(i, "reps", e.target.value)} style={{ ...S.input, flex: 1 }} />
+            {i > 0 && <button onClick={() => removeSet(i)} style={S.removeBtn}>✕</button>}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button onClick={addSet} style={S.ghostBtn}>+ ست</button>
+          <button onClick={addExercise} style={S.primaryBtn}>ثبت حرکت</button>
+        </div>
+      </div>
+      {currentSession?.exercises?.length > 0 && (
+        <button onClick={finishSession} style={S.finishBtn}>
+          {editingId ? "💾 ذخیره تغییرات" : "✅ پایان جلسه"}
+        </button>
+      )}
+    </div>
+  );
+
+  // ── PROGRESS VIEW ─────────────────────────────────────────────────────────
+  if (view === "progress") {
+    const now = Date.now();
+    const periodMs = progressPeriod === "week" ? 7 * 86400000 : progressPeriod === "month" ? 30 * 86400000 : Infinity;
+    const filtered = sessions.filter(s => (now - s.id) <= periodMs);
+    const exMap = {};
+    filtered.forEach(s => {
+      s.exercises.forEach(ex => {
+        if (!exMap[ex.name]) exMap[ex.name] = [];
+        exMap[ex.name].push({ id: s.id, maxW: Math.max(...ex.sets.map(st => st.weight)) });
+      });
+    });
+    Object.keys(exMap).forEach(k => exMap[k].sort((a, b) => a.id - b.id));
+    const items = Object.entries(exMap).filter(([, a]) => a.length >= 2).map(([name, arr]) => {
+      const first = arr[0].maxW, last = arr[arr.length - 1].maxW, diff = last - first;
+      return { name, first, last, diff, pct: first > 0 ? ((diff / first) * 100).toFixed(0) : 0, count: arr.length };
+    }).sort((a, b) => b.diff - a.diff);
+    const single = Object.entries(exMap).filter(([, a]) => a.length === 1).map(([name, a]) => ({ name, weight: a[0].maxW }));
+    const volDiff = filtered.length > 1 ? totalVolume(filtered[0]) - totalVolume(filtered[filtered.length - 1]) : 0;
+
+    return (
+      <div style={S.container}>
+        <div style={S.header}>
+          <button onClick={() => setView("home")} style={S.backBtn}>← بازگشت</button>
+          <h1 style={S.title}>📈 گزارش پیشرفت</h1>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {[["week", "هفته"], ["month", "ماه"], ["all", "همه"]].map(([val, label]) => (
+            <button key={val} onClick={() => setProgressPeriod(val)} style={{
+              flex: 1, padding: "10px 0", borderRadius: 10, border: "1px solid #334155", cursor: "pointer", fontSize: 13, fontWeight: 700,
+              background: progressPeriod === val ? "linear-gradient(135deg,#38bdf8,#6366f1)" : "#1e293b",
+              color: progressPeriod === val ? "#fff" : "#94a3b8"
+            }}>{label}</button>
+          ))}
+        </div>
+        {filtered.length < 2
+          ? <div style={{ ...S.card, textAlign: "center" }}><p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>حداقل ۲ جلسه لازمه 🏋️</p></div>
+          : <>
+            <div style={S.statsRow}>
+              <div style={S.statBox}><div style={S.statNum}>{filtered.length}</div><div style={S.statLabel}>جلسه</div></div>
+              <div style={S.statBox}>
+                <div style={{ ...S.statNum, color: volDiff >= 0 ? "#22c55e" : "#ef4444" }}>{volDiff >= 0 ? "+" : ""}{volDiff.toLocaleString()}</div>
+                <div style={S.statLabel}>حجم (kg)</div>
+              </div>
+              <div style={S.statBox}><div style={{ ...S.statNum, color: "#a78bfa" }}>{items.length}</div><div style={S.statLabel}>رشد</div></div>
+            </div>
+            {items.length > 0 && (
+              <div style={S.card}>
+                <h3 style={S.sectionTitle}>🔥 پیشرفت وزنه‌ها</h3>
+                {items.map(item => (
+                  <div key={item.name} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #0f172a" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ color: "#e2e8f0", fontSize: 14, fontWeight: 600 }}>{item.name}</span>
+                      <span style={{ color: item.diff > 0 ? "#22c55e" : item.diff < 0 ? "#ef4444" : "#94a3b8", fontWeight: 700, fontSize: 14 }}>
+                        {item.diff > 0 ? "↑" : item.diff < 0 ? "↓" : "="} {Math.abs(item.diff)}kg ({item.diff > 0 ? "+" : ""}{item.pct}%)
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: "#64748b", fontSize: 12 }}>{item.first}kg</span>
+                      <div style={{ flex: 1, background: "#0f172a", borderRadius: 4, height: 6 }}>
+                        <div style={{ width: `${Math.min(Math.abs(item.diff / item.first) * 200 + 50, 100)}%`, background: item.diff >= 0 ? "#22c55e" : "#ef4444", height: "100%", borderRadius: 4 }} />
+                      </div>
+                      <span style={{ color: item.diff >= 0 ? "#22c55e" : "#ef4444", fontSize: 12, fontWeight: 700 }}>{item.last}kg</span>
+                    </div>
+                    <div style={{ color: "#475569", fontSize: 11, marginTop: 4 }}>{item.count} جلسه</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {single.length > 0 && (
+              <div style={S.card}>
+                <h3 style={S.sectionTitle}>📌 یک جلسه</h3>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {single.map(({ name, weight }) => (
+                    <div key={name} style={{ background: "#0f172a", borderRadius: 8, padding: "6px 12px" }}>
+                      <span style={{ color: "#94a3b8", fontSize: 13 }}>{name} </span>
+                      <span style={{ color: "#38bdf8", fontSize: 13 }}>{weight}kg</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        }
+      </div>
+    );
+  }
+
+  // ── HOME VIEW ─────────────────────────────────────────────────────────────
+  const weekCount = sessions.filter(s => (Date.now() - s.id) < 7 * 86400000).length;
+  return (
+    <div style={S.container}>
+      {exportModal}
+      <div style={S.heroSection}>
+        <div style={{ fontSize: 52, marginBottom: 8 }}>🏋️</div>
+        <h1 style={S.heroTitle}>Gym Tracker</h1>
+        <p style={{ color: "#64748b", fontSize: 13, margin: 0 }}>ثبت هوشمند تمرین</p>
+      </div>
+      <div style={S.statsRow}>
+        <div style={S.statBox}><div style={S.statNum}>{sessions.length}</div><div style={S.statLabel}>کل جلسات</div></div>
+        <div style={S.statBox}><div style={S.statNum}>{weekCount}</div><div style={S.statLabel}>این هفته</div></div>
+        <div style={S.statBox}><div style={S.statNum}>{sessions.length > 0 ? totalVolume(sessions[0]).toLocaleString() : "—"}</div><div style={S.statLabel}>آخرین (kg)</div></div>
+      </div>
+      <div style={S.card}>
+        <h3 style={S.sectionTitle}>📅 تاریخ تمرین</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <button onClick={() => { const d = new Date(sessionDate); d.setDate(d.getDate() - 1); setSessionDate(d.toISOString().split("T")[0]); }}
+            style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 18 }}>‹</button>
+          <input type="date" value={sessionDate} onChange={e => setSessionDate(e.target.value)}
+            style={{ ...S.input, flex: 1, textAlign: "center", colorScheme: "dark" }} />
+          <button onClick={() => { const d = new Date(sessionDate); d.setDate(d.getDate() + 1); setSessionDate(d.toISOString().split("T")[0]); }}
+            style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 18 }}>›</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {[["امروز", 0], ["دیروز", 1], ["پریروز", 2]].map(([label, offset]) => (
+            <button key={label} onClick={() => { const d = new Date(); d.setDate(d.getDate() - offset); setSessionDate(d.toISOString().split("T")[0]); }}
+              style={{ ...S.ghostBtn, flex: 1, fontSize: 12, padding: "8px 0" }}>{label}</button>
+          ))}
+        </div>
+        <button onClick={() => startSession(sessionDate)} style={{ ...S.primaryBtn, width: "100%" }}>🚀 شروع جلسه</button>
+      </div>
+      {sessions.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button onClick={() => setView("history")} style={{ ...S.secondaryCTA, flex: 1 }}>📅 تاریخچه</button>
+          <button onClick={() => setView("progress")} style={{ ...S.secondaryCTA, flex: 1, color: "#a78bfa" }}>📈 پیشرفت</button>
+        </div>
+      )}
+      <div style={{ ...S.card, borderColor: "#1e3a5f", background: "#0c1a2e" }}>
+        <h3 style={{ ...S.sectionTitle, marginBottom: 10 }}>💾 بکاپ</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={exportJSON} style={{ ...S.ghostBtn, flex: 1, fontSize: 13 }}>⬇️ خروجی JSON</button>
+          <label style={{ ...S.ghostBtn, flex: 1, fontSize: 13, textAlign: "center", cursor: "pointer", margin: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            ⬆️ ورودی JSON
+            <input type="file" accept=".json" onChange={importJSON} style={{ display: "none" }} />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const S = {
+  container: { minHeight: "100vh", background: "#0f172a", fontFamily: "'Vazirmatn',Tahoma,sans-serif", direction: "rtl", padding: "16px", maxWidth: 480, margin: "0 auto", paddingBottom: 48 },
+  header: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, paddingTop: 8 },
+  title: { color: "#f1f5f9", fontSize: 20, fontWeight: 800, margin: 0 },
+  backBtn: { background: "#1e293b", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 14, padding: "6px 10px", borderRadius: 8 },
+  heroSection: { textAlign: "center", paddingTop: 28, paddingBottom: 20 },
+  heroTitle: { color: "#f1f5f9", fontSize: 26, fontWeight: 900, margin: "0 0 4px" },
+  statsRow: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 },
+  statBox: { background: "#1e293b", borderRadius: 12, padding: "14px 8px", textAlign: "center", border: "1px solid #334155" },
+  statNum: { color: "#38bdf8", fontSize: 22, fontWeight: 900 },
+  statLabel: { color: "#64748b", fontSize: 11, marginTop: 4 },
+  card: { background: "#1e293b", borderRadius: 16, padding: 16, marginBottom: 12, border: "1px solid #334155" },
+  sectionTitle: { color: "#e2e8f0", fontSize: 15, fontWeight: 700, margin: "0 0 14px" },
+  exerciseCard: { background: "#1e293b", borderRadius: 12, padding: 12, marginBottom: 8, border: "1px solid #334155" },
+  setChip: { background: "#0f172a", color: "#38bdf8", padding: "4px 10px", borderRadius: 20, fontSize: 12, border: "1px solid #1e3a5f" },
+  tag: { background: "#0f172a", color: "#94a3b8", padding: "3px 8px", borderRadius: 6, fontSize: 11 },
+  select: { flex: 1, background: "#0f172a", border: "1px solid #334155", borderRadius: 10, color: "#e2e8f0", padding: "10px 12px", fontSize: 14, outline: "none" },
+  input: { background: "#0f172a", border: "1px solid #334155", borderRadius: 10, color: "#e2e8f0", padding: "10px 12px", fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box" },
+  primaryBtn: { background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 },
+  ghostBtn: { background: "transparent", border: "1px solid #334155", borderRadius: 10, color: "#94a3b8", padding: "10px 14px", cursor: "pointer", fontSize: 14 },
+  removeBtn: { background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, padding: "4px 8px" },
+  finishBtn: { width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", color: "#fff", border: "none", borderRadius: 14, padding: "16px", fontWeight: 800, cursor: "pointer", fontSize: 16, marginTop: 8 },
+  secondaryCTA: { background: "#1e293b", border: "1px solid #334155", color: "#94a3b8", borderRadius: 14, padding: "14px", fontWeight: 700, cursor: "pointer", fontSize: 15, marginBottom: 0, width: "100%" },
+  smallBtn: { background: "#0f172a", border: "1px solid #334155", color: "#38bdf8", borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontSize: 14 },
+  exportBox: { background: "#0f172a", border: "1px solid #334155", borderRadius: 10, padding: 12, fontSize: 12, color: "#94a3b8", whiteSpace: "pre-wrap", lineHeight: 1.8, maxHeight: 200, overflowY: "auto" },
+  empty: { color: "#64748b", textAlign: "center", padding: "48px 0", fontSize: 14 },
+  overlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 },
+  modalBox: { background: "#1e293b", border: "1px solid #334155", borderRadius: 16, padding: 24, width: "80%", maxWidth: 320 },
+};
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
+</script>
+</body>
+</html>
